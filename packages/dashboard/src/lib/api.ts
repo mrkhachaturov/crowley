@@ -60,6 +60,15 @@ export interface Run {
   defaultDatasetItemCount: number | null;
   defaultKeyValueStoreId?: string;
   defaultRequestQueueId?: string;
+  /**
+   * Every storage of the run by alias (Apify `storageIds`): `default` plus
+   * the aliases of the actor's `storages.datasets`.
+   */
+  storageIds?: {
+    datasets: Record<string, string>;
+    keyValueStores: Record<string, string>;
+    requestQueues: Record<string, string>;
+  };
   // Server returns these nested under `options` (Apify-compatible shape).
   options?: {
     timeoutSecs?: number;
@@ -1320,10 +1329,11 @@ export async function deleteRequestQueue(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Find which run "produced" a given default storage record.
+ * Find which run "produced" a given storage record.
  *
  * The relationship lives on the runs table (default_dataset_id /
- * default_key_value_store_id / default_request_queue_id). The API
+ * default_key_value_store_id / default_request_queue_id, and
+ * dataset_aliases for a run's other datasets). The API
  * doesn't expose a reverse-lookup endpoint, so we fetch the user's
  * runs once and filter client-side, at the API's max page size (200 —
  * the default page of 50 silently hid producing runs older than the
@@ -1347,7 +1357,10 @@ export async function findProducingRun(
       : storageType === 'kv'
         ? 'defaultKeyValueStoreId'
         : 'defaultRequestQueueId';
-  return list.find((r) => r[field] === storageId) ?? null;
+  // A dataset may also be one of the run's aliased datasets (storageIds).
+  const isRunDataset = (r: Run) =>
+    storageType === 'dataset' && Object.values(r.storageIds?.datasets ?? {}).includes(storageId);
+  return list.find((r) => r[field] === storageId || isRunDataset(r)) ?? null;
 }
 
 export async function getScalerStatus(): Promise<ScalerStatus> {

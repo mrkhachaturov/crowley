@@ -25,6 +25,7 @@ import {
   rerunRun,
   downloadAsBlob,
   getActor,
+  getDatasetItems,
   getRun,
   getRunDatasetItems,
   getRunInput,
@@ -76,6 +77,8 @@ function RunDetail() {
   const [inputLoading, setInputLoading] = useState(false);
   const [dataset, setDataset] = useState<unknown[] | null>(null); // null = not fetched
   const [datasetLoading, setDatasetLoading] = useState(false);
+  // Which of the run's datasets (storageIds alias) the Output tab shows.
+  const [datasetAlias, setDatasetAlias] = useState('default');
   // Per-run hooks are immutable post-dispatch — one fetch on run-load is
   // enough. `null` distinguishes "not fetched yet" from "fetched, empty".
   const [runWebhooks, setRunWebhooks] = useState<Webhook[] | null>(null);
@@ -146,6 +149,7 @@ function RunDetail() {
   useEffect(() => {
     setInput(undefined);
     setDataset(null);
+    setDatasetAlias('default');
     setRunWebhooks(null);
     setDeliveriesByWebhook({});
   }, [id]);
@@ -187,6 +191,10 @@ function RunDetail() {
     };
   }, [loadedRunId, runWebhooks]);
 
+  // The default dataset is read through the run; any other alias by its id.
+  const aliasDatasetId =
+    datasetAlias === 'default' ? undefined : run?.storageIds?.datasets[datasetAlias];
+
   // Lazy-load tab data on demand
   useEffect(() => {
     if (tab === 'input' && input === undefined && !inputLoading) {
@@ -198,7 +206,10 @@ function RunDetail() {
     }
     if (tab === 'output' && dataset === null && !datasetLoading) {
       setDatasetLoading(true);
-      getRunDatasetItems(id, { limit: DATASET_PREVIEW_LIMIT })
+      (aliasDatasetId
+        ? getDatasetItems(aliasDatasetId, { limit: DATASET_PREVIEW_LIMIT })
+        : getRunDatasetItems(id, { limit: DATASET_PREVIEW_LIMIT })
+      )
         .then((d) => setDataset(d || []))
         .catch(() => setDataset([]))
         .finally(() => setDatasetLoading(false));
@@ -224,7 +235,17 @@ function RunDetail() {
         });
       }
     }
-  }, [tab, id, input, inputLoading, dataset, datasetLoading, runWebhooks, deliveriesByWebhook]);
+  }, [
+    tab,
+    id,
+    input,
+    inputLoading,
+    dataset,
+    datasetLoading,
+    aliasDatasetId,
+    runWebhooks,
+    deliveriesByWebhook,
+  ]);
 
   // Auto-scroll log tail
   useEffect(() => {
@@ -312,6 +333,10 @@ function RunDetail() {
   }
 
   const isLive = !TERMINAL.has(run.status);
+  // Alias → dataset id; a run from before storageIds has only its default.
+  const runDatasets =
+    run.storageIds?.datasets ?? (run.defaultDatasetId ? { default: run.defaultDatasetId } : {});
+  const shownDatasetId = runDatasets[datasetAlias];
   const tabs: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'logs', label: 'Logs', icon: Terminal },
     { id: 'input', label: 'Input', icon: FileInput },
@@ -418,16 +443,21 @@ function RunDetail() {
           <DefRow icon={Clock} label="Timeout">
             {run.options?.timeoutSecs ? `${run.options.timeoutSecs}s` : '—'}
           </DefRow>
-          {run.defaultDatasetId && (
-            <DefRow icon={Database} label="Dataset" copyValue={run.defaultDatasetId}>
+          {Object.entries(runDatasets).map(([alias, datasetId]) => (
+            <DefRow
+              key={alias}
+              icon={Database}
+              label={alias === 'default' ? 'Dataset' : `Dataset · ${alias}`}
+              copyValue={datasetId}
+            >
               <AppLink
-                href={`/datasets/${run.defaultDatasetId}`}
+                href={`/datasets/${datasetId}`}
                 className="font-mono text-[11px] text-foreground hover:text-signal break-all"
               >
-                {run.defaultDatasetId}
+                {datasetId}
               </AppLink>
             </DefRow>
-          )}
+          ))}
           {run.defaultKeyValueStoreId && (
             <DefRow icon={Boxes} label="KV store" copyValue={run.defaultKeyValueStoreId}>
               <AppLink
@@ -584,28 +614,53 @@ function RunDetail() {
             )}
 
             {tab === 'output' && (
-              <div className="absolute inset-0 overflow-auto">
-                {datasetLoading || dataset === null ? (
-                  <div className="h-full grid place-items-center">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <div className="absolute inset-0 overflow-auto flex flex-col">
+                {Object.keys(runDatasets).length > 1 && (
+                  <div className="sticky top-0 z-10 flex gap-1 px-4 py-2 border-b border-border bg-background">
+                    {Object.keys(runDatasets).map((alias) => (
+                      <button
+                        key={alias}
+                        type="button"
+                        onClick={() => {
+                          if (alias === datasetAlias) return;
+                          setDatasetAlias(alias);
+                          setDataset(null);
+                        }}
+                        className={cn(
+                          'px-2 h-6 rounded-sm font-mono text-[10px] uppercase tracking-widest',
+                          alias === datasetAlias
+                            ? 'bg-secondary text-signal'
+                            : 'text-muted-foreground hover:text-foreground'
+                        )}
+                      >
+                        {alias}
+                      </button>
+                    ))}
                   </div>
-                ) : dataset.length === 0 ? (
-                  <div className="h-full grid place-items-center text-center">
-                    <div>
-                      <Database className="h-6 w-6 text-muted-foreground/40 mx-auto mb-2" />
-                      <p className="font-mono text-[11px] tracking-wider text-muted-foreground">
-                        [ NO OUTPUT ]
-                      </p>
-                      <p className="text-[12px] text-muted-foreground mt-1">
-                        {isLive
-                          ? 'Run is in progress. Records will appear once produced.'
-                          : 'This run did not write to the default dataset.'}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <DatasetTable items={dataset} />
                 )}
+                <div className="flex-1 min-h-0">
+                  {datasetLoading || dataset === null ? (
+                    <div className="h-full grid place-items-center">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : dataset.length === 0 ? (
+                    <div className="h-full grid place-items-center text-center">
+                      <div>
+                        <Database className="h-6 w-6 text-muted-foreground/40 mx-auto mb-2" />
+                        <p className="font-mono text-[11px] tracking-wider text-muted-foreground">
+                          [ NO OUTPUT ]
+                        </p>
+                        <p className="text-[12px] text-muted-foreground mt-1">
+                          {isLive
+                            ? 'Run is in progress. Records will appear once produced.'
+                            : `This run did not write to the ${datasetAlias} dataset.`}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <DatasetTable items={dataset} />
+                  )}
+                </div>
               </div>
             )}
 
@@ -629,15 +684,14 @@ function RunDetail() {
             )}
           </div>
 
-          {tab === 'output' && run.defaultDatasetId && dataset && dataset.length > 0 && (
+          {tab === 'output' && shownDatasetId && dataset && dataset.length > 0 && (
             <div className="px-4 py-2 border-t border-border bg-secondary/40 flex items-center justify-between">
               <button
                 type="button"
                 onClick={() => {
-                  if (!run.defaultDatasetId) return;
                   void downloadAsBlob(
-                    `/v2/datasets/${run.defaultDatasetId}/items?download=1`,
-                    `dataset-${run.defaultDatasetId}.json`
+                    `/v2/datasets/${shownDatasetId}/items?download=1`,
+                    `dataset-${shownDatasetId}.json`
                   ).catch((err) =>
                     toast.error('Download failed', {
                       description: (err as Error).message,
@@ -649,7 +703,7 @@ function RunDetail() {
                 ↓ download all
               </button>
               <AppLink
-                href={`/datasets/${run.defaultDatasetId}`}
+                href={`/datasets/${shownDatasetId}`}
                 className="font-mono text-[10px] tracking-widest text-muted-foreground hover:text-foreground uppercase"
               >
                 view full dataset · {dataset.length} shown →

@@ -31,6 +31,7 @@ import { redis } from '../storage/redis.js';
 import { authenticate } from '../auth/middleware.js';
 import { resolveActor, ACTOR_NOT_FOUND, type ActorRow } from '../lib/resolve-actor.js';
 import { selectRunBuildStamp } from '../lib/builds.js';
+import { createAliasedDatasets, extraDatasetAliases, runStorageIds } from '../lib/run-storages.js';
 
 /** ActorRow as returned by the queries below, with the owner's username. */
 type ActorRowWithUsername = ActorRow & { username: string | null };
@@ -862,8 +863,9 @@ export const actorsRoutes: FastifyPluginAsync<ActorsSegmentOptions> = async (
 
     // Create storages with user ownership.
     // KEEP-IN-SYNC: the rerun endpoint (routes/runs.ts POST
-    // /actor-runs/:runId/rerun) clones this creation flow — storage trio,
-    // INPUT write, build stamp. Update both together. (Rerun copies the
+    // /actor-runs/:runId/rerun) and scheduler.ts clone this creation flow —
+    // storage trio, INPUT write, build stamp, aliased datasets. Update all
+    // together. (Rerun copies the
     // origin's stored INPUT record as-is, so the body/query parsing in
     // lib/run-body.ts has no rerun counterpart.)
     await query('INSERT INTO datasets (id, user_id) VALUES ($1, $2)', [
@@ -895,6 +897,14 @@ export const actorsRoutes: FastifyPluginAsync<ActorsSegmentOptions> = async (
     const buildId = buildStamp?.build_id ?? null;
     const buildNumber = buildStamp?.build_number ?? null;
 
+    // A dataset per alias the stamped build declares besides `default`,
+    // created before the run row so the runner never claims a run without them.
+    const datasetAliases = await createAliasedDatasets(
+      { query },
+      request.user!.id,
+      extraDatasetAliases(buildStamp?.datasets)
+    );
+
     // Create run record with READY status so Runner picks it up (with user ownership)
     const result = await query<{
       id: string;
@@ -909,8 +919,8 @@ export const actorsRoutes: FastifyPluginAsync<ActorsSegmentOptions> = async (
       created_at: Date;
     }>(
       `
-      INSERT INTO runs (id, actor_id, user_id, status, default_dataset_id, default_key_value_store_id, default_request_queue_id, timeout_secs, memory_mbytes, build_id, build_number)
-      VALUES ($1, $2, $3, 'READY', $4, $5, $6, $7, $8, $9, $10)
+      INSERT INTO runs (id, actor_id, user_id, status, default_dataset_id, default_key_value_store_id, default_request_queue_id, timeout_secs, memory_mbytes, build_id, build_number, dataset_aliases)
+      VALUES ($1, $2, $3, 'READY', $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `,
       [
@@ -924,6 +934,7 @@ export const actorsRoutes: FastifyPluginAsync<ActorsSegmentOptions> = async (
         memory,
         buildId,
         buildNumber,
+        datasetAliases ? JSON.stringify(datasetAliases) : null,
       ]
     );
 
@@ -1010,6 +1021,12 @@ export const actorsRoutes: FastifyPluginAsync<ActorsSegmentOptions> = async (
         defaultDatasetId: datasetId,
         defaultKeyValueStoreId: kvStoreId,
         defaultRequestQueueId: requestQueueId,
+        storageIds: runStorageIds({
+          default_dataset_id: datasetId,
+          default_key_value_store_id: kvStoreId,
+          default_request_queue_id: requestQueueId,
+          dataset_aliases: datasetAliases,
+        }),
         buildId,
         buildNumber,
       },

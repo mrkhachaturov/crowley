@@ -26,6 +26,12 @@ import {
 } from '../lib/wait-for-terminal.js';
 import { sendDatasetItems, type DatasetItemsQuery } from '../lib/dataset-items.js';
 import { selectRunBuildStamp } from '../lib/builds.js';
+import {
+  createAliasedDatasets,
+  extraDatasetAliases,
+  runStorageIds,
+  type DatasetAliases,
+} from '../lib/run-storages.js';
 
 export interface RunRow {
   id: string;
@@ -38,6 +44,8 @@ export interface RunRow {
   default_dataset_id: string | null;
   default_key_value_store_id: string | null;
   default_request_queue_id: string | null;
+  /** Datasets of the build's `storages.datasets` aliases besides `default`. */
+  dataset_aliases: DatasetAliases | null;
   timeout_secs: number;
   memory_mbytes: number;
   container_url: string | null;
@@ -844,8 +852,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
           };
         }
 
-        // KEEP-IN-SYNC: storage trio + INPUT + build stamp mirror the
-        // creation flow in actors.ts POST /acts/:actorId/runs.
+        // KEEP-IN-SYNC: storage trio + INPUT + build stamp + aliased datasets
+        // mirror the creation flow in actors.ts POST /acts/:actorId/runs.
         await client.query('INSERT INTO datasets (id, user_id) VALUES ($1, $2)', [
           datasetId,
           request.user!.id,
@@ -876,12 +884,18 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
           : null;
         const buildId = buildStamp?.build_id ?? null;
         const buildNumber = buildStamp?.build_number ?? null;
+        // Fresh, like the default dataset: the current build's aliases, not the origin's.
+        const datasetAliases = await createAliasedDatasets(
+          client,
+          request.user!.id,
+          extraDatasetAliases(buildStamp?.datasets)
+        );
 
         const result = await client.query<RunRow>(
           `
           WITH inserted AS (
-            INSERT INTO runs (id, actor_id, user_id, status, default_dataset_id, default_key_value_store_id, default_request_queue_id, timeout_secs, memory_mbytes, build_id, build_number, origin_run_id)
-            VALUES ($1, $2, $3, 'READY', $4, $5, $6, $7, $8, $9, $10, $11)
+            INSERT INTO runs (id, actor_id, user_id, status, default_dataset_id, default_key_value_store_id, default_request_queue_id, timeout_secs, memory_mbytes, build_id, build_number, origin_run_id, dataset_aliases)
+            VALUES ($1, $2, $3, 'READY', $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING *
           )
           SELECT r.*, d.item_count AS default_dataset_item_count
@@ -900,6 +914,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
             buildId,
             buildNumber,
             chainRootId,
+            datasetAliases ? JSON.stringify(datasetAliases) : null,
           ]
         );
 
@@ -1310,6 +1325,7 @@ export function formatRun(row: RunRow) {
     defaultDatasetItemCount: row.default_dataset_item_count,
     defaultKeyValueStoreId: row.default_key_value_store_id,
     defaultRequestQueueId: row.default_request_queue_id,
+    storageIds: runStorageIds(row),
     options: {
       timeoutSecs: row.timeout_secs,
       memoryMbytes: row.memory_mbytes,

@@ -99,12 +99,12 @@ describe('runSchedulerTick', () => {
     // return a row so the function doesn't bail on the missing-actor path.
     mockQuery
       .mockResolvedValueOnce({ rows: [{ default_run_options: null }] }) // SELECT actor defaults
-      .mockResolvedValue({ rows: [] }); // datasets / kv / queues / runs INSERTs
+      .mockResolvedValue({ rows: [] }); // storage INSERTs, build lookup (none), run INSERT
 
     await runSchedulerTick();
 
-    // 1 actor lookup + 4 storage/run INSERTs
-    expect(mockQuery).toHaveBeenCalledTimes(5);
+    // 1 actor lookup + 3 storage INSERTs + 1 build lookup + 1 run INSERT
+    expect(mockQuery).toHaveBeenCalledTimes(6);
     const insertSqls = mockQuery.mock.calls.map((c) => c[0] as string);
     expect(insertSqls.some((s) => /INSERT INTO datasets/.test(s))).toBe(true);
     expect(insertSqls.some((s) => /INSERT INTO key_value_stores/.test(s))).toBe(true);

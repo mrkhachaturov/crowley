@@ -11,6 +11,7 @@ import { config } from './config.js';
 import {
   executeRun,
   buildActorEnv,
+  runStorageIds,
   stopRun,
   writeLifecycleLog,
   clampMemoryToHost,
@@ -96,6 +97,8 @@ export interface RunJob {
   default_dataset_id: string;
   default_key_value_store_id: string;
   default_request_queue_id: string;
+  /** Datasets of the build's `storages.datasets` aliases besides `default`. */
+  dataset_aliases?: Record<string, string> | null;
   timeout_secs: number;
   memory_mbytes: number;
   retry_count: number;
@@ -557,6 +560,7 @@ async function processRun(run: RunJob): Promise<void> {
       defaultDatasetId: run.default_dataset_id,
       defaultKeyValueStoreId: run.default_key_value_store_id,
       defaultRequestQueueId: run.default_request_queue_id,
+      datasetAliases: run.dataset_aliases,
       // Host-clamped: the actor SDK sizes its heap/autoscaling from
       // APIFY_MEMORY_MBYTES, so it must see the limit the container will
       // actually be enforced at, not the unsatisfiable requested value.
@@ -1075,10 +1079,11 @@ export async function maybeRetryRun(
         );
         await client.query(
           `INSERT INTO runs (id, actor_id, user_id, status, default_dataset_id, default_key_value_store_id,
-            default_request_queue_id, timeout_secs, memory_mbytes, retry_count, origin_run_id, run_after)
+            default_request_queue_id, timeout_secs, memory_mbytes, retry_count, origin_run_id, run_after,
+            dataset_aliases)
            VALUES ($1, $2, (SELECT user_id FROM runs WHERE id = $3), 'READY',
             $4, $5, $6, $7, $8, $9, $10,
-            NOW() + INTERVAL '1 second' * $11)`,
+            NOW() + INTERVAL '1 second' * $11, $12)`,
           [
             newRunId,
             run.actor_id,
@@ -1091,6 +1096,8 @@ export async function maybeRetryRun(
             newRetryCount,
             originRunId,
             delaySecs,
+            // The retry reuses the failed run's storages, aliased datasets included.
+            run.dataset_aliases ? JSON.stringify(run.dataset_aliases) : null,
           ]
         );
         await client.query('COMMIT');
@@ -1220,6 +1227,7 @@ export async function attemptWebhookDelivery(
         defaultDatasetId: run.default_dataset_id,
         defaultKeyValueStoreId: run.default_key_value_store_id,
         defaultRequestQueueId: run.default_request_queue_id,
+        storageIds: runStorageIds(run),
         options: { timeoutSecs: run.timeout_secs, memoryMbytes: run.memory_mbytes },
         buildId: run.build_id ?? null,
         buildNumber: run.build_number ?? null,

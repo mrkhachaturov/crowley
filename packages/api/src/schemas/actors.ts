@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { DATASET_ALIAS_PATTERN } from '../lib/run-storages.js';
 import { zBoolQuery } from './common.js';
 import { SUPPORTED_WEBHOOK_EVENTS } from './webhooks.js';
 
@@ -45,12 +46,54 @@ function findJsonbUnsafeString(
 }
 
 /**
+ * Apify's rules for `storages.datasets` (multiple datasets): an object of aliases that contains
+ * `default`, every alias matching DATASET_ALIAS_PATTERN, and never alongside `storages.dataset`.
+ */
+function checkDatasetAliases(storages: unknown, ctx: z.RefinementCtx): void {
+  if (!storages || typeof storages !== 'object' || !('datasets' in storages)) return;
+  const { datasets } = storages;
+  const path = ['storages', 'datasets'];
+  if ('dataset' in storages) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path,
+      message: 'storages.dataset and storages.datasets are mutually exclusive',
+    });
+  }
+  if (!datasets || typeof datasets !== 'object' || Array.isArray(datasets)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path,
+      message: 'storages.datasets must map dataset aliases to schemas',
+    });
+    return;
+  }
+  if (!('default' in datasets)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path,
+      message: 'storages.datasets must contain the default alias',
+    });
+  }
+  for (const alias of Object.keys(datasets)) {
+    if (!DATASET_ALIAS_PATTERN.test(alias)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...path, alias],
+        message: `dataset alias "${alias}" must match ${DATASET_ALIAS_PATTERN.source} (letters, digits, underscores)`,
+      });
+    }
+  }
+}
+
+/**
  * Apify-shaped actor definition (`.actor/actor.json` with the input schema
  * and README inlined), stored per build on actor_builds.actor_definition.
  * `input` must be the schema object itself, not a file path — the Apify MCP
  * server only keeps it when it has both `type` and `properties`. Unknown
  * keys pass through so Apify fields like `dockerfile` and `storages` survive.
- * The input schema is stored as given, not validated against Apify's spec.
+ * The input schema is stored as given, not validated against Apify's spec;
+ * `storages.datasets` is, since runs create a dataset per alias.
  */
 export const ActorDefinitionSchema = z
   .object({
@@ -79,6 +122,7 @@ export const ActorDefinitionSchema = z
         message: `actorDefinition.readme must be at most ${MAX_ACTOR_README_BYTES} bytes`,
       });
     }
+    checkDatasetAliases(def.storages, ctx);
     const badPath = findJsonbUnsafeString(def, []);
     if (badPath) {
       ctx.addIssue({
