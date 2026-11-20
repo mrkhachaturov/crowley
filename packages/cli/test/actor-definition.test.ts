@@ -80,7 +80,7 @@ describe('resolveActorDefinitionWithSources: payload shape', () => {
       title: 'My Actor',
       description: 'Does things',
       dockerfile: './Dockerfile',
-      storages: { dataset: './dataset_schema.json' },
+      // `storages` is not passed through: its schema files are read in (dataset-views.test.ts).
       environmentVariables: { MODE: 'fast' },
       defaultRunOptions: { build: 'latest', timeoutSecs: 60, memoryMbytes: 512 },
       minMemoryMbytes: 256,

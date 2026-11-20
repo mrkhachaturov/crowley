@@ -9,6 +9,7 @@ import { query } from '../db/index.js';
 import { appendSearchCondition } from '../db/search.js';
 import { authenticate } from '../auth/middleware.js';
 import { applyWebhookTemplate } from '../webhooks/apply-template.js';
+import { runStorageIds, type DatasetAliases, type RunStorageIds } from '../lib/run-storages.js';
 
 /**
  * Redaction + length cap for the rendered webhook body before persisting
@@ -502,6 +503,7 @@ export interface WebhookRun {
   defaultDatasetId: string | null;
   defaultKeyValueStoreId: string | null;
   defaultRequestQueueId: string | null;
+  datasetAliases?: DatasetAliases | null;
   timeoutSecs: number;
   memoryMbytes: number;
   buildId: string | null;
@@ -532,6 +534,7 @@ export interface WebhookPayload {
     defaultDatasetId: string | null;
     defaultKeyValueStoreId: string | null;
     defaultRequestQueueId: string | null;
+    storageIds: RunStorageIds;
     options: { timeoutSecs: number; memoryMbytes: number };
     buildId: string | null;
     buildNumber: string | null;
@@ -563,6 +566,12 @@ export function buildWebhookPayload(
       defaultDatasetId: run.defaultDatasetId,
       defaultKeyValueStoreId: run.defaultKeyValueStoreId,
       defaultRequestQueueId: run.defaultRequestQueueId,
+      storageIds: runStorageIds({
+        default_dataset_id: run.defaultDatasetId,
+        default_key_value_store_id: run.defaultKeyValueStoreId,
+        default_request_queue_id: run.defaultRequestQueueId,
+        dataset_aliases: run.datasetAliases,
+      }),
       options: { timeoutSecs: run.timeoutSecs, memoryMbytes: run.memoryMbytes },
       buildId: run.buildId,
       buildNumber: run.buildNumber,

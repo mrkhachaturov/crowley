@@ -36,6 +36,12 @@ export async function configureHttp(app: FastifyInstance): Promise<void> {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization'],
+    // Browser clients on another origin (the dashboard) read Apify's paging headers.
+    exposedHeaders: [
+      'X-Apify-Pagination-Total',
+      'X-Apify-Pagination-Offset',
+      'X-Apify-Pagination-Limit',
+    ],
   });
 
   // Enable compression/decompression (handles gzip request bodies from SDK)

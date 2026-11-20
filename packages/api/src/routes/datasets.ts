@@ -22,6 +22,8 @@ interface DatasetRow {
   modified_at: Date;
   accessed_at: Date;
   item_count: number;
+  /** The actor's dataset schema (Apify `DatasetResource.schema`), set when a run creates it. */
+  schema: unknown;
 }
 
 export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -119,7 +121,7 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
     // Update accessed_at
     await query('UPDATE datasets SET accessed_at = NOW() WHERE id = $1', [result.rows[0].id]);
 
-    return { data: formatDataset(result.rows[0]) };
+    return { data: { ...formatDataset(result.rows[0]), schema: result.rows[0].schema ?? null } };
   });
 
   /**
@@ -193,7 +195,11 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
 
     return sendDatasetItems(
       reply,
-      { id: dataset.rows[0].id, itemCount: dataset.rows[0].item_count },
+      {
+        id: dataset.rows[0].id,
+        itemCount: dataset.rows[0].item_count,
+        schema: dataset.rows[0].schema,
+      },
       request.query
     );
   });

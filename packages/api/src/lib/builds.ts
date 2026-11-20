@@ -147,19 +147,31 @@ export async function selectDefaultBuilds(
   return builds;
 }
 
+export interface RunBuildStamp {
+  build_id: string;
+  build_number: string | null;
+  datasets: unknown;
+  /** The build's whole `storages`, for the schema of each dataset it creates. */
+  storages: unknown;
+}
+
 /**
  * The build a new run is stamped with: the actor's newest SUCCEEDED build
  * (by created_at), as `{ build_id, build_number }`, or null when the actor
  * was never pushed. `build_number` is computed by BUILD_NUMBER_SQL, so the
  * run's `buildNumber` matches what GET /actor-builds/:id reports for the
- * same build ("0.1.3", not the bare version "0.1").
+ * same build ("0.1.3", not the bare version "0.1"). `datasets` is the
+ * build's `storages.datasets`, so the run gets the datasets of the build it
+ * is stamped with.
  */
 export async function selectRunBuildStamp(
   actorId: string,
   db: Queryable = { query }
-): Promise<{ build_id: string; build_number: string | null } | null> {
-  const result = await db.query<{ build_id: string; build_number: string | null }>(
-    `SELECT b.id AS build_id, ${BUILD_NUMBER_SQL} AS build_number
+): Promise<RunBuildStamp | null> {
+  const result = await db.query<RunBuildStamp>(
+    `SELECT b.id AS build_id, ${BUILD_NUMBER_SQL} AS build_number,
+            b.actor_definition->'storages'->'datasets' AS datasets,
+            b.actor_definition->'storages' AS storages
        FROM actor_builds b
        LEFT JOIN actor_versions v ON v.id = b.version_id
       WHERE b.actor_id = $1 AND b.status = 'SUCCEEDED'

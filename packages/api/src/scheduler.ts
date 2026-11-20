@@ -15,6 +15,12 @@ import { nanoid } from 'nanoid';
 import { query, withAdvisoryLock, LOCK_IDS } from './db/index.js';
 import { redis } from './storage/redis.js';
 import { config } from './config.js';
+import { selectRunBuildStamp } from './lib/builds.js';
+import {
+  attachDatasetSchemas,
+  createAliasedDatasets,
+  extraDatasetAliases,
+} from './lib/run-storages.js';
 
 interface ScheduleRow {
   id: string;
@@ -148,9 +154,22 @@ async function triggerScheduledRun(schedule: ScheduleRow): Promise<void> {
     const { putKVRecord } = await import('./storage/s3.js');
     await putKVRecord(kvStoreId, 'INPUT', JSON.stringify(schedule.input ?? {}), 'application/json');
 
+    // KEEP-IN-SYNC: build stamp and aliased datasets as in actors.ts
+    // POST /acts/:actorId/runs; the datasets come from the stamped build.
+    const buildStamp = await selectRunBuildStamp(schedule.actor_id);
+    const datasetAliases = await createAliasedDatasets(
+      { query },
+      schedule.user_id,
+      extraDatasetAliases(buildStamp?.datasets)
+    );
+    await attachDatasetSchemas({ query }, buildStamp?.storages, {
+      default: datasetId,
+      ...datasetAliases,
+    });
+
     await query(
-      `INSERT INTO runs (id, actor_id, user_id, status, default_dataset_id, default_key_value_store_id, default_request_queue_id, timeout_secs, memory_mbytes)
-       VALUES ($1, $2, $3, 'READY', $4, $5, $6, $7, $8)`,
+      `INSERT INTO runs (id, actor_id, user_id, status, default_dataset_id, default_key_value_store_id, default_request_queue_id, timeout_secs, memory_mbytes, build_id, build_number, dataset_aliases)
+       VALUES ($1, $2, $3, 'READY', $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         runId,
         schedule.actor_id,
@@ -160,6 +179,9 @@ async function triggerScheduledRun(schedule: ScheduleRow): Promise<void> {
         requestQueueId,
         timeoutSecs,
         memoryMbytes,
+        buildStamp?.build_id ?? null,
+        buildStamp?.build_number ?? null,
+        datasetAliases ? JSON.stringify(datasetAliases) : null,
       ]
     );
 

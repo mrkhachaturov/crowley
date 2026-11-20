@@ -755,6 +755,31 @@ async function pullImageIfNeeded(
   await writeLifecycleLog(runId, 'INFO', `Image ${image} pulled successfully`);
 }
 
+/** Apify's `storageIds` / `ACTOR_STORAGES_JSON`: the run's storages by alias. */
+export interface RunStorageIds {
+  datasets: Record<string, string>;
+  keyValueStores: Record<string, string>;
+  requestQueues: Record<string, string>;
+}
+
+/**
+ * KEEP-IN-SYNC with packages/api/src/lib/run-storages.ts → runStorageIds:
+ * the run object and the actor must see the same map.
+ */
+export function runStorageIds(run: {
+  default_dataset_id: string | null;
+  default_key_value_store_id: string | null;
+  default_request_queue_id: string | null;
+  dataset_aliases?: Record<string, string> | null;
+}): RunStorageIds {
+  const byDefault = (id: string | null): Record<string, string> => (id ? { default: id } : {});
+  return {
+    datasets: { ...byDefault(run.default_dataset_id), ...run.dataset_aliases },
+    keyValueStores: byDefault(run.default_key_value_store_id),
+    requestQueues: byDefault(run.default_request_queue_id),
+  };
+}
+
 /**
  * Build Apify-compatible environment variables for a run.
  */
@@ -767,6 +792,8 @@ export function buildActorEnv(options: {
   defaultDatasetId: string;
   defaultKeyValueStoreId: string;
   defaultRequestQueueId: string;
+  /** Datasets of the build's `storages.datasets` aliases besides `default`. */
+  datasetAliases?: Record<string, string> | null;
   memoryMbytes?: number;
   timeoutSecs?: number;
   proxyPassword?: string | null;
@@ -805,6 +832,16 @@ export function buildActorEnv(options: {
     APIFY_DEFAULT_DATASET_ID: defaultDatasetId,
     APIFY_DEFAULT_KEY_VALUE_STORE_ID: defaultKeyValueStoreId,
     APIFY_DEFAULT_REQUEST_QUEUE_ID: defaultRequestQueueId,
+    // Every storage by alias; the SDK resolves openDataset({ alias }) only from
+    // this when APIFY_IS_AT_HOME is set, and throws without it.
+    ACTOR_STORAGES_JSON: JSON.stringify(
+      runStorageIds({
+        default_dataset_id: defaultDatasetId,
+        default_key_value_store_id: defaultKeyValueStoreId,
+        default_request_queue_id: defaultRequestQueueId,
+        dataset_aliases: options.datasetAliases,
+      })
+    ),
 
     // Runtime flags
     APIFY_IS_AT_HOME: '1',

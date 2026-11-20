@@ -465,6 +465,14 @@ ALTER TABLE actor_builds ADD COLUMN IF NOT EXISTS actor_definition JSONB;
 
 -- Build numbers (<version>.<n>, #117) count a version's earlier builds.
 CREATE INDEX IF NOT EXISTS idx_actor_builds_version ON actor_builds(version_id, created_at);
+
+-- Datasets a run gets for the aliases of storages.datasets besides default
+-- (Apify multiple datasets): alias -> dataset id, NULL when there are none.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS dataset_aliases JSONB;
+
+-- The actor's schema for this dataset (storages.dataset or storages.datasets.<alias>
+-- of the run's build): views for the Output tab and GET .../items?view=.
+ALTER TABLE datasets ADD COLUMN IF NOT EXISTS schema JSONB;
 `;
 
 export async function migrate(): Promise<void> {

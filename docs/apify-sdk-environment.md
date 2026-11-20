@@ -43,6 +43,7 @@ When the runner starts an Actor container, it injects the full Apify SDK environ
 | `APIFY_DEFAULT_DATASET_ID`         | Default dataset for `Actor.pushData()`                       |
 | `APIFY_DEFAULT_KEY_VALUE_STORE_ID` | Default KV store for `Actor.getInput()` / `Actor.setValue()` |
 | `APIFY_DEFAULT_REQUEST_QUEUE_ID`   | Default request queue                                        |
+| `ACTOR_STORAGES_JSON`              | Storage IDs by alias, for `Actor.openDataset({ alias })`     |
 | `APIFY_IS_AT_HOME`                 | `1`                                                          |
 | `APIFY_HEADLESS`                   | `1`                                                          |
 | `APIFY_MEMORY_MBYTES`              | Memory limit for this run                                    |
@@ -68,6 +69,7 @@ When `APIFY_PROXY_PASSWORD` is not injected, the SDK falls back to resolving it 
 | `Actor.getInput()`                                     | ✅     |
 | `Actor.getValue()` / `Actor.setValue()`                | ✅     |
 | `Actor.openDataset()`                                  | ✅     |
+| Multiple datasets (`storages.datasets`)                | ✅     |
 | `Actor.openKeyValueStore()`                            | ✅     |
 | `Actor.openRequestQueue()`                             | ✅     |
 | Request deduplication                                  | ✅     |

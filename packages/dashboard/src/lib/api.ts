@@ -60,6 +60,15 @@ export interface Run {
   defaultDatasetItemCount: number | null;
   defaultKeyValueStoreId?: string;
   defaultRequestQueueId?: string;
+  /**
+   * Every storage of the run by alias (Apify `storageIds`): `default` plus
+   * the aliases of the actor's `storages.datasets`.
+   */
+  storageIds?: {
+    datasets: Record<string, string>;
+    keyValueStores: Record<string, string>;
+    requestQueues: Record<string, string>;
+  };
   // Server returns these nested under `options` (Apify-compatible shape).
   options?: {
     timeoutSecs?: number;
@@ -275,7 +284,35 @@ export interface Dataset {
   createdAt: string;
   modifiedAt: string;
   accessedAt: string;
+  /** The actor's dataset schema (`views` drive the table tabs); GET by id only. */
+  schema?: DatasetSchema | null;
 }
+
+/** Apify dataset schema, the parts the dashboard renders (docs.apify.com/storage/dataset-schema). */
+export interface DatasetSchema {
+  title?: string;
+  views?: Record<string, DatasetView>;
+}
+
+export interface DatasetView {
+  title?: string;
+  description?: string;
+  transformation?: { fields?: string[] };
+  display?: {
+    component?: string;
+    properties?: Record<string, { label?: string; format?: DatasetFieldFormat }>;
+  };
+}
+
+export type DatasetFieldFormat =
+  | 'text'
+  | 'number'
+  | 'date'
+  | 'link'
+  | 'boolean'
+  | 'image'
+  | 'array'
+  | 'object';
 
 export interface User {
   id: string;
@@ -983,6 +1020,28 @@ export async function getRunInput(runId: string): Promise<unknown> {
   }
 }
 
+/**
+ * One page of dataset items and the dataset's total (`x-apify-pagination-total`). `view` makes
+ * the API apply that schema view's transformation (fields, flatten, unwind, omit).
+ */
+export async function getDatasetItemsPage(
+  id: string,
+  options: { offset: number; limit: number; view?: string }
+): Promise<{ items: unknown[]; total: number }> {
+  const qs = new URLSearchParams({ offset: String(options.offset), limit: String(options.limit) });
+  if (options.view) qs.set('view', options.view);
+  const token = getToken();
+  const res = await fetch(`${API_URL}/v2/datasets/${id}/items?${qs.toString()}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: { message: 'Request failed' } }));
+    throw new Error(error.error?.message || 'Request failed');
+  }
+  const items = (await res.json()) as unknown[];
+  return { items, total: Number(res.headers.get('x-apify-pagination-total') ?? items.length) };
+}
+
 export async function getRunDatasetItems(
   runId: string,
   options?: { offset?: number; limit?: number }
@@ -1320,10 +1379,11 @@ export async function deleteRequestQueue(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Find which run "produced" a given default storage record.
+ * Find which run "produced" a given storage record.
  *
  * The relationship lives on the runs table (default_dataset_id /
- * default_key_value_store_id / default_request_queue_id). The API
+ * default_key_value_store_id / default_request_queue_id, and
+ * dataset_aliases for a run's other datasets). The API
  * doesn't expose a reverse-lookup endpoint, so we fetch the user's
  * runs once and filter client-side, at the API's max page size (200 —
  * the default page of 50 silently hid producing runs older than the
@@ -1347,7 +1407,10 @@ export async function findProducingRun(
       : storageType === 'kv'
         ? 'defaultKeyValueStoreId'
         : 'defaultRequestQueueId';
-  return list.find((r) => r[field] === storageId) ?? null;
+  // A dataset may also be one of the run's aliased datasets (storageIds).
+  const isRunDataset = (r: Run) =>
+    storageType === 'dataset' && Object.values(r.storageIds?.datasets ?? {}).includes(storageId);
+  return list.find((r) => r[field] === storageId || isRunDataset(r)) ?? null;
 }
 
 export async function getScalerStatus(): Promise<ScalerStatus> {

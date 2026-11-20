@@ -8,11 +8,17 @@
  *                  whole dataset
  *   desc=1|true    newest first; `offset` then counts from the end
  *   download=1     whole dataset as a JSON attachment
- *   fields=a,b     keep only these top-level keys, in this order
- *   omit=a,b       drop these top-level keys (applied after `fields`)
- *   flatten        accepted and ignored (not implemented yet)
+ *   unwind=a       expand array / object fields into rows (lib/dataset-transform.ts)
+ *   flatten=a      `{a:{b:1}}` → `{"a.b":1}`
+ *   fields=a,b     keep only these keys, in this order; `outputFields` renames them
+ *   omit=a,b       drop these keys, nested names too
+ *   view=id        the dataset schema view's transformation, limit and desc;
+ *                  explicit parameters override it
  *
- * Empty `limit` / `fields` / `omit` / `flatten` are treated as absent: apify-client
+ * `unwind` runs per stored item after `offset` / `limit`, so a page can hold
+ * more rows than `limit`.
+ *
+ * Empty list parameters are treated as absent: apify-client
  * serializes an unset array option as an empty string (`fields=&omit=`),
  * and the MCP server always sends them.
  *
@@ -23,6 +29,7 @@
 import type { FastifyReply } from 'fastify';
 import { listDatasetItems, iterateDatasetItems, countDatasetItems } from '../storage/s3.js';
 import { zBoolQuery } from '../schemas/common.js';
+import { buildItemTransform, findView } from './dataset-transform.js';
 
 export interface DatasetItemsQuery {
   offset?: string;
@@ -33,6 +40,9 @@ export interface DatasetItemsQuery {
   fields?: string | string[];
   omit?: string | string[];
   flatten?: string | string[];
+  unwind?: string | string[];
+  outputFields?: string | string[];
+  view?: string;
 }
 
 /** Dataset identity plus its authoritative `datasets.item_count`. */
@@ -40,6 +50,8 @@ export interface DatasetRef {
   id: string;
   /** Null when the datasets row is missing (run-scoped LEFT JOIN). */
   itemCount: number | null;
+  /** `datasets.schema`; needed only to resolve `view`. */
+  schema?: unknown;
 }
 
 /**
@@ -59,34 +71,6 @@ export function parseKeyList(value: string | string[] | undefined): string[] | u
     .map((k) => k.trim())
     .filter((k) => k.length > 0);
   return keys.length > 0 ? keys : undefined;
-}
-
-/**
- * Build the per-item projection for `fields` / `omit`, or null when neither
- * is set (callers skip the map entirely). Only plain objects are projected;
- * a non-object item (a bare string pushed via pushData) passes through.
- */
-export function buildItemProjection(
-  fields: string[] | undefined,
-  omit: string[] | undefined
-): ((item: unknown) => unknown) | null {
-  if (!fields && !omit) return null;
-  const omitSet = omit ? new Set(omit) : null;
-  return (item) => {
-    if (item === null || typeof item !== 'object' || Array.isArray(item)) return item;
-    const src = item as Record<string, unknown>;
-    let out: Record<string, unknown>;
-    if (fields) {
-      out = {};
-      for (const f of fields) {
-        if (Object.prototype.hasOwnProperty.call(src, f)) out[f] = src[f];
-      }
-    } else {
-      out = { ...src };
-    }
-    if (omitSet) for (const k of omitSet) delete out[k];
-    return out;
-  };
 }
 
 /**
@@ -169,9 +153,40 @@ export async function sendDatasetItems(
   dataset: DatasetRef,
   q: DatasetItemsQuery
 ): Promise<unknown> {
-  const desc = isTrueQuery(q.desc);
-  const project = buildItemProjection(parseKeyList(q.fields), parseKeyList(q.omit));
-  const serialize = (item: unknown) => JSON.stringify(project ? project(item) : item);
+  const view = q.view ? findView(dataset.schema, q.view) : undefined;
+  if (q.view && !view) {
+    reply.status(400);
+    return { error: { type: 'invalid-parameter', message: `Dataset has no view "${q.view}"` } };
+  }
+  const vt = view?.transformation ?? {};
+  const fields = parseKeyList(q.fields) ?? vt.fields;
+  const outputFields = parseKeyList(q.outputFields);
+  if (outputFields && outputFields.length !== fields?.length) {
+    reply.status(400);
+    return {
+      error: {
+        type: 'invalid-parameter',
+        message: '`outputFields` must name as many fields as `fields`',
+      },
+    };
+  }
+  const transform = buildItemTransform({
+    unwind: parseKeyList(q.unwind) ?? vt.unwind,
+    flatten: parseKeyList(q.flatten) ?? vt.flatten,
+    fields,
+    outputFields,
+    omit: parseKeyList(q.omit) ?? vt.omit,
+  });
+  const desc = q.desc === undefined || q.desc === '' ? vt.desc === true : isTrueQuery(q.desc);
+  if ((q.limit === undefined || q.limit === '') && typeof vt.limit === 'number') {
+    q = { ...q, limit: String(vt.limit) };
+  }
+  const serialize = (item: unknown) =>
+    transform
+      ? transform(item)
+          .map((row) => JSON.stringify(row))
+          .join(',')
+      : JSON.stringify(item);
 
   // ?download=1 — stream the FULL dataset as a single JSON array file.
   // Browser opens it as a download; no in-memory materialization on either
@@ -266,5 +281,5 @@ export async function sendDatasetItems(
   reply.header('x-apify-pagination-offset', offset);
   reply.header('x-apify-pagination-limit', limit);
 
-  return project ? items.map(project) : items;
+  return transform ? items.flatMap(transform) : items;
 }

@@ -74,8 +74,10 @@ const README_FALLBACKS = ['.actor/README.md', 'README.md'];
  * directory that contains `.actor/`). Paths are resolved against it, never
  * against `process.cwd()`.
  *
- * - Every actor.json field is copied as is (title, description, storages,
+ * - Every actor.json field is copied as is (title, description,
  *   environmentVariables, defaultRunOptions, dockerfile, ...).
+ * - `storages`: the dataset and key-value store schema paths are read in
+ *   (relative to `.actor/`); inline schemas are used as is.
  * - `input`: an inline object is used as is; a string is a path relative to
  *   `.actor/`; if absent, the first usable fallback file is used.
  * - `readme`: the `readme` path (relative to `.actor/`), else
@@ -182,6 +184,11 @@ export async function resolveActorDefinitionWithSources(
     definition.readme = readme;
   }
 
+  // ---- storage schemas ----
+  if (definition.storages !== undefined) {
+    definition.storages = await inlineStorageSchemas(actorDir, definition.storages);
+  }
+
   const totalBytes = Buffer.byteLength(JSON.stringify(definition));
   if (totalBytes > MAX_ACTOR_DEFINITION_BYTES) {
     throw new ActorDefinitionError(
@@ -193,6 +200,37 @@ export async function resolveActorDefinitionWithSources(
 }
 
 // ---- Helpers ----
+
+/**
+ * `storages.dataset`, `storages.datasets.<alias>` and `storages.keyValueStore`
+ * with their schema files read in, so the API can attach each schema to the
+ * storage it creates for a run. Inline objects and other keys pass through.
+ */
+async function inlineStorageSchemas(actorDir: string, storages: unknown): Promise<unknown> {
+  if (!isPlainObject(storages)) return storages;
+  const read = async (field: string, value: unknown): Promise<Record<string, unknown>> => {
+    if (isPlainObject(value)) return value;
+    if (typeof value !== 'string') {
+      throw new ActorDefinitionError(
+        `.actor/actor.json: "${field}" must be an inline schema object or a path to a JSON file`
+      );
+    }
+    const schema = await readJsonObject(resolveReferencedPath(actorDir, field, value), actorDir);
+    return schema!;
+  };
+  const inlined: Record<string, unknown> = { ...storages };
+  for (const key of ['dataset', 'keyValueStore']) {
+    if (inlined[key] !== undefined) inlined[key] = await read(`storages.${key}`, inlined[key]);
+  }
+  if (isPlainObject(inlined.datasets)) {
+    const datasets: Record<string, unknown> = {};
+    for (const [alias, value] of Object.entries(inlined.datasets)) {
+      datasets[alias] = await read(`storages.datasets.${alias}`, value);
+    }
+    inlined.datasets = datasets;
+  }
+  return inlined;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
